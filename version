@@ -1,10 +1,16 @@
-v26.4.12-opt更新内容：
+v26.4.13-opt更新内容：
 
-优化版基于 v26.4.11，主要改进：
-1、配置变更（端口/证书/域名/UUID）改用 jq 处理，替代 sed 按行号替换，更稳定
-2、安装时自动应用网络调优（BBR 等 sysctl 参数）
-3、精简代码库，移除 serv00/workers 等非核心组件，聚焦 VPS 一键部署
-4、自更新与二进制下载统一指向本仓库 xiaocaixin621/sing-box-yg
+基于 v26.4.12，主要改进：
+1、Debian/Ubuntu 安装依赖时设置 NEEDRESTART_MODE=l，跳过 needrestart 交互式服务重启提示
+2、修复服务端配置模板：移除 Hysteria2 入站无效的 fast_open、Tuic 入站无效的 udp_relay_mode
+3、安装/重启前自动校验配置（sing-box check），配置不兼容时中止并给出明确提示
+4、已安装环境进入 sb 菜单或重启服务时，自动清理上述过时字段
+5、安装完成后检测服务是否真正 active，未启动时不再误报「安装成功」
+
+经验说明：
+- needrestart 提示与内核选择无关，选 19（none of the above）后维护窗口 reboot 即可
+- fast_open / udp_relay_mode 仅适用于客户端出站或分享链接，写入服务端入站会导致 FATAL 崩溃
+- 与选 1.10.7 或最新内核无关，两套模板均曾含此问题，现已统一修复
 
 一键安装：
 bash <(curl -Ls https://raw.githubusercontent.com/xiaocaixin621/sing-box-yg/main/sb.sh)

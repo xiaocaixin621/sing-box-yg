@@ -76,6 +76,81 @@ net.ipv4.tcp_mtu_probing = 1
 EOF
   sysctl --system >/dev/null 2>&1 || true
 }
+
+# Debian/Ubuntu: 抑制 needrestart 交互提示（等价于选择 none of the above，不重启服务）
+apt_prepare(){
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=l
+}
+apt_update(){
+apt_prepare
+apt-get update -y \
+  -o Dpkg::Options::="--force-confdef" \
+  -o Dpkg::Options::="--force-confold"
+}
+apt_install(){
+apt_prepare
+apt-get install -y \
+  -o Dpkg::Options::="--force-confdef" \
+  -o Dpkg::Options::="--force-confold" \
+  "$@"
+}
+
+sb_status_active(){
+if command -v apk >/dev/null 2>&1; then
+[[ -n $(rc-service sing-box status 2>/dev/null | grep -w started) ]]
+else
+[[ -n $(systemctl is-active sing-box 2>/dev/null | grep -w active) ]]
+fi
+}
+
+sb_sanitize_config(){
+local cfg fixed=0
+for cfg in /etc/s-box/sb.json /etc/s-box/sb10.json /etc/s-box/sb11.json; do
+[[ -f "$cfg" ]] || continue
+if jq -e '.inbounds[1].fast_open // .inbounds[2].udp_relay_mode' "$cfg" >/dev/null 2>&1; then
+jq 'if .inbounds[1]? then .inbounds[1] |= del(.fast_open) else . end
+    | if .inbounds[2]? then .inbounds[2] |= del(.udp_relay_mode) else . end' "$cfg" > "${cfg}.tmp" \
+&& mv "${cfg}.tmp" "$cfg"
+fixed=1
+fi
+done
+[[ $fixed -eq 1 ]] && yellow "已自动移除服务端入站中的过时字段（fast_open / udp_relay_mode）"
+}
+
+sbcheckconfig(){
+local cfg="${1:-/etc/s-box/sb.json}"
+[[ -f "$cfg" ]] || { red "配置文件不存在：$cfg"; return 1; }
+[[ -x /etc/s-box/sing-box ]] || { red "Sing-box 内核未安装"; return 1; }
+local err
+err=$(/etc/s-box/sing-box check -c "$cfg" 2>&1) || {
+red "配置文件校验失败：$cfg"
+echo "$err"
+if echo "$err" | grep -q 'unknown field'; then
+yellow "提示：服务端入站不支持客户端专用字段（例如 fast_open、udp_relay_mode）"
+yellow "请更新脚本至最新版，或按报错路径手动删除无效字段后重启服务"
+fi
+return 1
+}
+return 0
+}
+
+sbensureactive(){
+local i
+for i in $(seq 1 6); do
+sb_status_active && return 0
+sleep 2
+done
+red "Sing-box 服务未能正常启动"
+if command -v apk >/dev/null 2>&1; then
+rc-service sing-box status 2>/dev/null
+else
+journalctl -u sing-box -n 12 --no-pager 2>/dev/null
+fi
+yellow "排查：sb 选择 10 查看日志，或执行 journalctl -u sing-box -n 50 --no-pager"
+return 1
+}
+
 hostname=$(hostname)
 
 if [ ! -f sbyg_update ]; then
@@ -94,8 +169,8 @@ yum clean all && yum makecache
 cd
 fi
 if [ -x "$(command -v apt-get)" ]; then
-apt update -y
-apt install jq cron socat busybox iptables-persistent coreutils util-linux -y
+apt_update
+apt_install jq cron socat busybox iptables-persistent coreutils util-linux
 elif [ -x "$(command -v yum)" ]; then
 yum update -y && yum install epel-release -y
 yum install jq socat busybox coreutils util-linux -y
@@ -113,7 +188,7 @@ systemctl enable iptables >/dev/null 2>&1
 systemctl start iptables >/dev/null 2>&1
 fi
 if [[ -z $vi ]]; then
-apt install iputils-ping iproute2 systemctl -y
+apt_install iputils-ping iproute2 systemctl
 fi
 
 packages=("curl" "openssl" "iptables" "tar" "expect" "wget" "xxd" "python3" "qrencode" "git")
@@ -123,7 +198,7 @@ package="${packages[$i]}"
 inspackage="${inspackages[$i]}"
 if ! command -v "$package" &> /dev/null; then
 if [ -x "$(command -v apt-get)" ]; then
-apt-get install -y "$inspackage"
+apt_install "$inspackage"
 elif [ -x "$(command -v yum)" ]; then
 yum install -y "$inspackage"
 elif [ -x "$(command -v dnf)" ]; then
@@ -442,7 +517,6 @@ cat > /etc/s-box/sb10.json <<EOF
         }
       ],
       "ignore_client_bandwidth": true,
-      "fast_open": true,
       "tls": {
         "enabled": true,
         "alpn": [
@@ -466,7 +540,6 @@ cat > /etc/s-box/sb10.json <<EOF
                 }
             ],
             "congestion_control": "bbr",
-            "udp_relay_mode": "native",
             "tls":{
                 "enabled": true,
                 "alpn": [
@@ -663,7 +736,6 @@ cat > /etc/s-box/sb11.json <<EOF
         }
       ],
       "ignore_client_bandwidth": true,
-      "fast_open": true,
       "tls": {
         "enabled": true,
         "alpn": [
@@ -687,7 +759,6 @@ cat > /etc/s-box/sb11.json <<EOF
                 }
             ],
             "congestion_control": "bbr",
-            "udp_relay_mode": "native",
             "tls":{
                 "enabled": true,
                 "alpn": [
@@ -822,14 +893,7 @@ fi
 }
 
 ipuuid(){
-if command -v apk >/dev/null 2>&1; then
-status_cmd="rc-service sing-box status"
-status_pattern="started"
-else
-status_cmd="systemctl is-active sing-box"
-status_pattern="active"
-fi
-if [[ -n $($status_cmd 2>/dev/null | grep -w "$status_pattern") && -f '/etc/s-box/sb.json' ]]; then
+if sb_status_active && [[ -f '/etc/s-box/sb.json' ]]; then
 v4v6
 if [[ -n $v4 && -n $v6 ]]; then
 green "调整IPv4/IPV6配置输出"
@@ -863,7 +927,10 @@ echo "$server_ipcl" > /etc/s-box/server_ipcl.log
 fi
 fi
 else
-red "Sing-box服务未运行" && exit
+red "Sing-box服务未运行"
+sbcheckconfig /etc/s-box/sb.json 2>/dev/null || true
+yellow "请执行 systemctl status sing-box 或 sb 选择 10 查看日志"
+exit 1
 fi
 }
 
@@ -1397,20 +1464,32 @@ red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 green "五、自动生成warp-wireguard出站账户" && sleep 2
 warpwg
 inssbjsonser
+if ! sbcheckconfig /etc/s-box/sb.json; then
+red "安装中止：生成的配置与当前 Sing-box 内核不兼容"
+yellow "建议更新脚本后重装，或通过 sb 菜单 8 切换内核版本"
+exit 1
+fi
 # 应用网络调优（提高吞吐/延迟表现），仅在安装阶段执行一次
 tune_network
 sbservice
-sbactive
+install_ok=0
+sbensureactive && install_ok=1
 #curl -sL https://gitlab.com/rwkgyg/sing-box-yg/-/raw/main/version/version | awk -F "更新内容" '{print $1}' | head -n 1 > /etc/s-box/v
 curl -sL "${SBYG_RAW}/version" | awk -F "更新内容" '{print $1}' | head -n 1 > /etc/s-box/v
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-lnsb && blue "Sing-box-yg脚本安装成功，脚本快捷方式：sb" && cronsb
+lnsb && cronsb
+if [[ $install_ok -eq 1 ]]; then
+blue "Sing-box-yg脚本安装成功，脚本快捷方式：sb"
 echo
 wgcfgo
 sbshare
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 blue "可选择9，刷新并显示所有协议配置及分享链接"
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+else
+yellow "脚本文件已安装，但 Sing-box 服务未正常启动"
+yellow "请执行 sb 选择 10 查看日志，修复后选择 6 重启服务"
+fi
 echo
 }
 
@@ -2482,6 +2561,11 @@ fi
 }
 
 restartsb(){
+sb_sanitize_config
+if ! sbcheckconfig /etc/s-box/sb.json; then
+red "配置校验失败，已跳过重启以避免服务反复崩溃"
+return 1
+fi
 if command -v apk >/dev/null 2>&1; then
 rc-service sing-box restart
 else
@@ -2497,8 +2581,8 @@ red "未正常安装Sing-box" && exit
 fi
 readp "1：重启\n2：关闭\n请选择：" menu
 if [ "$menu" = "1" ]; then
-restartsb
-sbactive
+restartsb || exit
+sbensureactive || exit
 green "Sing-box服务已重启\n" && sleep 3 && sb
 elif [ "$menu" = "2" ]; then
 if command -v apk >/dev/null 2>&1; then
@@ -2644,6 +2728,9 @@ fi
 sbactive(){
 if [[ ! -f /etc/s-box/sb.json ]]; then
 red "未正常启动Sing-box，请卸载重装或者选择10查看运行日志反馈" && exit
+fi
+if ! sbcheckconfig /etc/s-box/sb.json; then
+red "配置文件与内核不兼容，服务无法启动" && exit
 fi
 }
 
@@ -2961,6 +3048,7 @@ blue "ArgoSBX项目地址：https://github.com/yonggekkk/argosbx"
 echo
 }
 
+[[ -f /etc/s-box/sb.json ]] && sb_sanitize_config
 clear
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
 echo -e "${bblue} ░██     ░██      ░██ ██ ██         ░█${plain}█   ░██     ░██   ░██     ░█${red}█   ░██${plain}  "
@@ -3088,17 +3176,10 @@ v4_6="仅IPV6出站($showv6)"
 fi
 echo -e "代理IP优先级：$blue$v4_6$plain"
 fi
-if command -v apk >/dev/null 2>&1; then
-status_cmd="rc-service sing-box status"
-status_pattern="started"
-else
-status_cmd="systemctl is-active sing-box"
-status_pattern="active"
-fi
-if [[ -n $($status_cmd 2>/dev/null | grep -w "$status_pattern") && -f '/etc/s-box/sb.json' ]]; then
+if sb_status_active && [[ -f '/etc/s-box/sb.json' ]]; then
 echo -e "Sing-box状态：$blue运行中$plain"
-elif [[ -z $($status_cmd 2>/dev/null | grep -w "$status_pattern") && -f '/etc/s-box/sb.json' ]]; then
-echo -e "Sing-box状态：$yellow未启动，选择10查看日志并反馈，建议切换正式版内核或卸载重装脚本$plain"
+elif [[ -f '/etc/s-box/sb.json' ]]; then
+echo -e "Sing-box状态：$yellow未启动，选择10查看日志；若含 unknown field 请更新脚本后选6重启$plain"
 else
 echo -e "Sing-box状态：$red未安装$plain"
 fi
