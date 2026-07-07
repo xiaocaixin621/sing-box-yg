@@ -1,6 +1,6 @@
 ### Sing-box-yg 优化版一键三协议脚本（VPS 专用）
 
-基于 [yonggekkk/sing-box-yg](https://github.com/yonggekkk/sing-box-yg) 精简优化，保留核心功能，配置变更改用 `jq` 处理，更稳定可靠。
+基于 [xiaocaixin621/sing-box-yg](https://github.com/xiaocaixin621/sing-box-yg) 精简优化，保留核心功能，配置变更改用 `jq` 处理，更稳定可靠。
 
 - 支持三大核心协议：**Vless-reality-vision**、**Hysteria-2**、**Tuic-v5**
 - 默认 Vless Reality SNI 伪装域名：**www.microsoft.com**
@@ -30,11 +30,11 @@ bash <(wget -qO- https://raw.githubusercontent.com/xiaocaixin621/sing-box-yg/mai
 
 ### 优化说明
 
-| 项目 | 说明 |
-|------|------|
+| 项目     | 说明                                                             |
+| -------- | ---------------------------------------------------------------- |
 | 配置变更 | 端口、证书、域名等修改改用 `jq` 解析 JSON，替代按行号 `sed` 替换 |
-| 网络调优 | 安装时自动应用 BBR 等 sysctl 调优 |
-| 代码精简 | 移除 serv00、workers 等非 VPS 核心组件，聚焦一键部署 |
+| 网络调优 | 安装时自动应用 BBR 等 sysctl 调优                                |
+| 代码精简 | 移除 serv00、workers 等非 VPS 核心组件，聚焦一键部署             |
 
 ---
 
@@ -53,4 +53,4 @@ sing-box-yg/
 
 ### 致谢
 
-原项目作者：[甬哥 yonggekkk](https://github.com/yonggekkk/sing-box-yg)
+项目仓库：[xiaocaixin621/sing-box-yg](https://github.com/xiaocaixin621/sing-box-yg)

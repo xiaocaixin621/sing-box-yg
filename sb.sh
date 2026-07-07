@@ -77,6 +77,19 @@ EOF
   sysctl --system >/dev/null 2>&1 || true
 }
 
+url_encode(){
+  jq -rn --arg s "$1" '$s | @uri'
+}
+
+uri_host(){
+  local host="$1"
+  if [[ "$host" == *:* && "$host" != \[*\] ]]; then
+    echo "[$host]"
+  else
+    echo "$host"
+  fi
+}
+
 # Debian/Ubuntu: 抑制 needrestart 交互提示（等价于选择 none of the above，不重启服务）
 apt_prepare(){
 export DEBIAN_FRONTEND=noninteractive
@@ -132,6 +145,40 @@ yellow "请更新脚本至最新版，或按报错路径手动删除无效字段
 fi
 return 1
 }
+return 0
+}
+
+generate_reality_materials(){
+local key_pair=""
+if ! key_pair=$(/etc/s-box/sing-box generate reality-keypair 2>/dev/null); then
+red "Reality 密钥生成失败，请检查 Sing-box 内核是否可用"
+return 1
+fi
+private_key=$(printf '%s
+' "$key_pair" | awk '/PrivateKey/ {print $2}' | tr -d '"')
+public_key=$(printf '%s
+' "$key_pair" | awk '/PublicKey/ {print $2}' | tr -d '"')
+short_id=$(/etc/s-box/sing-box generate rand --hex 4 2>/dev/null)
+if [[ -z "$private_key" || -z "$public_key" || -z "$short_id" ]]; then
+red "Reality 参数生成不完整，请重试或更新 Sing-box 内核"
+return 1
+fi
+echo "$public_key" > /etc/s-box/public.key
+return 0
+}
+
+sb_validate_generated_configs(){
+if ! sbcheckconfig /etc/s-box/sb.json; then
+return 1
+fi
+if ! jq empty /etc/s-box/sbox.json >/dev/null 2>&1; then
+red "生成的 Sing-box 配置文件格式校验失败：/etc/s-box/sbox.json"
+return 1
+fi
+if ! grep -q '^proxies:' /etc/s-box/clmi.yaml || ! grep -q '^rules:' /etc/s-box/clmi.yaml; then
+red "生成的 Clash/Mihomo 配置文件结构校验失败：/etc/s-box/clmi.yaml"
+return 1
+fi
 return 0
 }
 
@@ -336,7 +383,7 @@ inscertificate(){
     ymzs(){
 ym_vl_re=www.microsoft.com
 echo
-blue "Vless-reality的SNI域名默认为 www.microsoft.com"
+blue "Vless-reality-vision 的 SNI 域名默认为 www.microsoft.com"
 tlsyn=true
 certificatec_hy2='/root/ygkkkca/cert.crt'
 certificatep_hy2='/root/ygkkkca/private.key'
@@ -347,7 +394,7 @@ certificatep_tuic='/root/ygkkkca/private.key'
 zqzs(){
 ym_vl_re=www.microsoft.com
 echo
-blue "Vless-reality的SNI域名默认为 www.microsoft.com"
+blue "Vless-reality-vision 的 SNI 域名默认为 www.microsoft.com"
 tlsyn=false
 certificatec_hy2='/etc/s-box/cert.pem'
 certificatep_hy2='/etc/s-box/private.key'
@@ -415,7 +462,7 @@ blue "确认的端口：$port" && sleep 2
 }
 
 vlport(){
-readp "\n设置Vless-reality端口 (回车跳过为10000-65535之间的随机端口)：" port
+readp "\n设置 Vless-reality-vision 端口 (回车跳过为10000-65535之间的随机端口)：" port
 chooseport
 port_vl_re=$port
 }
@@ -458,7 +505,7 @@ vlport && hy2port && tu5port
 fi
 echo
 blue "各协议端口确认如下"
-blue "Vless-reality端口：$port_vl_re"
+blue "Vless-reality-vision 端口：$port_vl_re"
 blue "Hysteria-2端口：$port_hy2"
 blue "Tuic-v5端口：$port_tu"
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
@@ -480,6 +527,7 @@ cat > /etc/s-box/sb10.json <<EOF
       "type": "vless",
       "sniff": true,
       "sniff_override_destination": true,
+      "tcp_fast_open": true,
       "tag": "vless-sb",
       "listen": "::",
       "listen_port": ${port_vl_re},
@@ -699,6 +747,7 @@ cat > /etc/s-box/sb11.json <<EOF
       "type": "vless",
       "sniff": true,
       "sniff_override_destination": true,
+      "tcp_fast_open": true,
       "tag": "vless-sb",
       "listen": "::",
       "listen_port": ${port_vl_re},
@@ -1009,7 +1058,8 @@ fi
 resvless(){
 echo
 white "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-vl_link="vless://$uuid@$server_ip:$vl_port?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$vl_name&fp=chrome&pbk=$public_key&sid=$short_id&type=tcp&headerType=none#vl-reality-$hostname"
+vl_host=$(uri_host "${server_ipcl:-$server_ip}")
+vl_link="vless://$(url_encode "$uuid")@$vl_host:$vl_port?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$(url_encode "$vl_name")&fp=chrome&pbk=$(url_encode "$public_key")&sid=$(url_encode "$short_id")&type=tcp&headerType=none#vl-reality-$hostname"
 echo "$vl_link" > /etc/s-box/vl_reality.txt
 red "🚀【 vless-reality-vision 】节点信息如下：" && sleep 2
 echo
@@ -1452,19 +1502,18 @@ inscertificate
 insport
 sleep 2
 echo
-blue "Vless-reality相关key与id将自动生成……"
-key_pair=$(/etc/s-box/sing-box generate reality-keypair)
-private_key=$(echo "$key_pair" | awk '/PrivateKey/ {print $2}' | tr -d '"')
-public_key=$(echo "$key_pair" | awk '/PublicKey/ {print $2}' | tr -d '"')
-echo "$public_key" > /etc/s-box/public.key
-short_id=$(/etc/s-box/sing-box generate rand --hex 4)
+blue "Vless-reality-vision 相关 key 与 id 将自动生成……"
+if ! generate_reality_materials; then
+red "安装中止：Reality 相关参数生成失败"
+exit 1
+fi
 wget -q -O /root/geoip.db https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.db
 wget -q -O /root/geosite.db https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.db
 red "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 green "五、自动生成warp-wireguard出站账户" && sleep 2
 warpwg
 inssbjsonser
-if ! sbcheckconfig /etc/s-box/sb.json; then
+if ! sb_validate_generated_configs; then
 red "安装中止：生成的配置与当前 Sing-box 内核不兼容"
 yellow "建议更新脚本后重装，或通过 sb 菜单 8 切换内核版本"
 exit 1
