@@ -28,6 +28,15 @@ bash <(wget -qO- https://raw.githubusercontent.com/xiaocaixin621/sing-box-yg/mai
 
 ---
 
+### 本次更新说明
+
+- 已将一键安装脚本入口统一更新为当前仓库地址，便于直接通过 GitHub 进行安装。
+- 对 Vless-reality-vision 的 Reality 参数生成流程做了增强：生成失败时会明确提示并中止，避免生成异常配置。
+- 增加了安装后配置生成与校验流程，避免把无效字段写入服务端配置导致启动异常。
+- 统一了相关文案显示，减少 Vless-reality 与 Vless-reality-vision 表述混用带来的困惑。
+
+---
+
 ### 优化说明
 
 | 项目     | 说明                                                             |
